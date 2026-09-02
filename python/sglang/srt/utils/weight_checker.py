@@ -220,7 +220,12 @@ class WeightChecker:
     def _model_state(self):
         model = self._get_model()
         yield from model.named_parameters()
-        yield from model.named_buffers()
+        # a non-persistent buffer is derived at build time and never synced, so
+        # nothing could restore it after reset
+        persistent = model.state_dict(keep_vars=True).keys()
+        for name, buffer in model.named_buffers():
+            if name in persistent:
+                yield name, buffer
 
 
 def _hash_tensor(t: torch.Tensor) -> str:

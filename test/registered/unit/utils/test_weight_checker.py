@@ -115,6 +115,9 @@ class _TinyModel(nn.Module):
         self.register_buffer("rotary_emb_cos_sin_cache", torch.full((8,), 3.14))
         self.register_buffer("rotary_emb_freqs_cis", torch.full((8,), 2.71))
         self.register_buffer("gate_proj_weight_fp32_cache", torch.full((8,), 1.41))
+        # Derived table that no checkpoint or weight sync carries (Kimi-K2.5's
+        # vision pos_emb.time_weight is one); its name matches no skip pattern.
+        self.register_buffer("time_table", torch.arange(8.0), persistent=False)
 
 
 class _FakeModelRunner:
@@ -562,6 +565,11 @@ class TestResetTensors(_WeightCheckerTestBase):
         self.checker._reset_tensors()
         torch.testing.assert_close(self.model.gate_proj_weight_fp32_cache, before)
 
+    def test_skips_non_persistent_buffer(self):
+        before = self.model.time_table.clone()
+        self.checker._reset_tensors()
+        torch.testing.assert_close(self.model.time_table, before)
+
 
 class TestCompare(_WeightCheckerTestBase):
 
@@ -571,6 +579,13 @@ class TestCompare(_WeightCheckerTestBase):
 
     def test_passes_when_unchanged(self):
         self.checker._snapshot()
+        self.checker._compare()  # no exception
+
+    def test_non_persistent_buffer_is_not_compared(self):
+        """A weight sync never carries a non-persistent buffer, so its drift is not a sync failure."""
+        self.checker._snapshot()
+        with torch.no_grad():
+            self.model.time_table.fill_(-1.0)
         self.checker._compare()  # no exception
 
     def test_success_releases_snapshot(self):
