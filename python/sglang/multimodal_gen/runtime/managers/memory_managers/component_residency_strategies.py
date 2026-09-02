@@ -259,6 +259,21 @@ class LayerwiseOffloadStrategy(ComponentResidencyStrategy):
             torch.mps.synchronize()
             module.restore_mps_cpu_non_layer_weights()
             torch.mps.empty_cache()
+        elif (
+            current_platform.is_cuda() and current_platform.device_shares_host_memory()
+        ):
+            # The stage's streamed layer windows are freed but still reserved
+            # by the caching allocator. On a shared pool that reserve is host
+            # memory the next stage's mapping needs as page cache; hand it back.
+            empty_cache = getattr(torch.get_device_module(), "empty_cache", None)
+            if empty_cache is not None:
+                empty_cache()
+            # And this component's own pages are now the least valuable in the
+            # cache until its next stage; say so before the next phase evicts.
+            for manager in module.layerwise_offload_managers:
+                advise_cold = getattr(manager, "advise_mapped_pages_cold", None)
+                if advise_cold is not None:
+                    advise_cold()
 
     def finish_request(
         self,
